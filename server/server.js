@@ -16,17 +16,26 @@ const app = express();
 
 await connectDB();
 
+/*
+ * Global middleware must be registered before routes.
+ */
 app.use(
   cors({
-    origin: process.env.CLIENT_URL,
+    origin:
+      process.env.CLIENT_URL ||
+      "http://localhost:5173",
+
     credentials: true,
+
     methods: [
       "GET",
       "POST",
       "PATCH",
       "PUT",
       "DELETE",
+      "OPTIONS",
     ],
+
     allowedHeaders: [
       "Content-Type",
       "Authorization",
@@ -39,8 +48,6 @@ app.use(
     limit: "1mb",
   })
 );
-app.use("/api/attacks", attackRouter);
-app.use("/api/rounds", roundRouter);
 
 app.use(
   express.urlencoded({
@@ -50,6 +57,9 @@ app.use(
 
 app.use(cookieParser());
 
+/*
+ * Basic server test route.
+ */
 app.get("/", (req, res) => {
   return res.status(200).json({
     success: true,
@@ -57,9 +67,18 @@ app.get("/", (req, res) => {
   });
 });
 
+/*
+ * API routes must come after cookieParser,
+ * express.json, and CORS.
+ */
 app.use("/api/auth", authRouter);
 app.use("/api/games", gameRouter);
+app.use("/api/rounds", roundRouter);
+app.use("/api/attacks", attackRouter);
 
+/*
+ * Unknown route handler.
+ */
 app.use((req, res) => {
   return res.status(404).json({
     success: false,
@@ -67,12 +86,16 @@ app.use((req, res) => {
   });
 });
 
+/*
+ * Global error handler.
+ */
 app.use((error, req, res, next) => {
-  console.error(error);
+  console.error("Server error:", error);
 
   return res.status(error.status || 500).json({
     success: false,
-    message: error.message || "Internal server error.",
+    message:
+      error.message || "Internal server error.",
   });
 });
 

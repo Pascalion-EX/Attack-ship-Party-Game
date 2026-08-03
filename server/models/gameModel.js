@@ -80,6 +80,17 @@ const gameSchema = new mongoose.Schema(
       min: 0,
     },
 
+    activeRound: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Round",
+      default: null,
+    },
+
+    roundStartedAt: {
+      type: Date,
+      default: null,
+    },
+
     currentTurnTeam: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Team",
