@@ -13,7 +13,6 @@ import requireAdmin from "../middleware/requireAdmin.js";
 
 const authRouter = express.Router();
 
-authRouter.post("/register", registerAdmin);
 authRouter.post("/login", loginAdmin);
 authRouter.post("/logout", logoutAdmin);
 
