@@ -108,6 +108,10 @@ const boardSchema = new mongoose.Schema(
       default: [],
       select: false,
     },
+    placementComplete: {
+  type: Boolean,
+  default: false,
+},
 
     attackedCells: {
       type: [attackedCellSchema],

@@ -66,6 +66,16 @@ const gameSchema = new mongoose.Schema(
       required: true,
       enum: [6, 8, 10],
     },
+    placementMode: {
+  type: String,
+  enum: ["random", "manual"],
+  default: "random",
+},
+
+shipsPlaced: {
+  type: Boolean,
+  default: false,
+},
 
     totalRounds: {
       type: Number,
