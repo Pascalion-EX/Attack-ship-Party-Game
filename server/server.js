@@ -23,22 +23,15 @@ const app = express();
  */
 await connectDB();
 
-/*
- * Allowed frontend origins.
- */
 const allowedOrigins = [
   "http://localhost:5173",
+  "https://attack-ship-party-game-qfvf.vercel.app",
   process.env.CLIENT_URL,
 ].filter(Boolean);
 
-/*
- * CORS
- */
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests without an Origin header
-      // e.g. Postman/server-to-server requests.
       if (!origin) {
         return callback(null, true);
       }
@@ -46,6 +39,8 @@ app.use(
       if (allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
+
+      console.error("CORS blocked origin:", origin);
 
       return callback(
         new Error(`CORS blocked request from: ${origin}`)
@@ -69,7 +64,6 @@ app.use(
     ],
   })
 );
-
 /*
  * Request parsers.
  */
