@@ -23,7 +23,7 @@ export const generateAlternatingTurnQueue = (teamAttackEntries) => {
       );
     }
 
-    if (entry.attacks > 3) {
+    if (entry.attacks > 15) {
       throw new Error(
         "A team cannot receive more than 3 attacks per round."
       );
