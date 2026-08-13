@@ -81,7 +81,7 @@ shipsPlaced: {
       type: Number,
       default: 6,
       min: 1,
-      max: 50,
+      max: 5000,
     },
 
     currentRound: {
