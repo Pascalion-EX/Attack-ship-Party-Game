@@ -12,8 +12,8 @@ import {
 } from "../services/coordinateService.js";
 
 /**
- * Returns the game state with safe team information.
- * Hidden board ships are never included.
+ * Returns safe game information.
+ * Hidden ship locations are never returned.
  */
 const populateGameState = async (gameId) => {
   return gameModel
@@ -36,8 +36,18 @@ const populateGameState = async (gameId) => {
 };
 
 /**
- * Moves the game to the next turn.
- * If no turns remain, it completes the round.
+ * Moves to the next queued attack.
+ *
+ * Example queue:
+ *
+ * Red
+ * Red
+ * Red
+ * Blue
+ * Blue
+ *
+ * Red therefore keeps attacking until
+ * all of its queued attacks are used.
  */
 const advanceTurn = async ({
   game,
@@ -46,17 +56,23 @@ const advanceTurn = async ({
   game.turnQueue.shift();
 
   if (game.turnQueue.length > 0) {
-    game.currentTurnTeam = game.turnQueue[0];
+    game.currentTurnTeam =
+      game.turnQueue[0];
 
     game.turnEndsAt = new Date(
-      Date.now() + game.turnDurationSeconds * 1000
+      Date.now() +
+        game.turnDurationSeconds * 1000
     );
 
     return;
   }
 
+  /*
+   * Round is finished.
+   */
   game.currentTurnTeam = null;
   game.turnEndsAt = null;
+
   game.phase = "roundComplete";
   game.status = "roundComplete";
 
@@ -83,21 +99,37 @@ const advanceTurn = async ({
  * POST /api/attacks/games/:gameId
  *
  * Body:
+ *
  * {
  *   "targetTeamId": "...",
  *   "coordinate": "B4"
  * }
  */
-export const processAttack = async (req, res) => {
-  const session = await mongoose.startSession();
+export const processAttack = async (
+  req,
+  res
+) => {
+  const session =
+    await mongoose.startSession();
 
   try {
     session.startTransaction();
 
     const { gameId } = req.params;
-    const { targetTeamId, coordinate } = req.body;
 
-    if (!mongoose.isValidObjectId(gameId)) {
+    const {
+      targetTeamId,
+      coordinate,
+    } = req.body;
+
+    /*
+     * Validate game ID.
+     */
+    if (
+      !mongoose.isValidObjectId(
+        gameId
+      )
+    ) {
       await session.abortTransaction();
 
       return res.status(400).json({
@@ -106,15 +138,26 @@ export const processAttack = async (req, res) => {
       });
     }
 
-    if (!mongoose.isValidObjectId(targetTeamId)) {
+    /*
+     * Validate target team ID.
+     */
+    if (
+      !mongoose.isValidObjectId(
+        targetTeamId
+      )
+    ) {
       await session.abortTransaction();
 
       return res.status(400).json({
         success: false,
-        message: "Invalid target team ID.",
+        message:
+          "Invalid target team ID.",
       });
     }
 
+    /*
+     * Load game.
+     */
     const game = await gameModel
       .findOne({
         _id: gameId,
@@ -131,12 +174,17 @@ export const processAttack = async (req, res) => {
       });
     }
 
+    /*
+     * Attacks only work during
+     * attack phase.
+     */
     if (game.phase !== "attack") {
       await session.abortTransaction();
 
       return res.status(400).json({
         success: false,
-        message: "The game is not in the attack phase.",
+        message:
+          "The game is not in the attack phase.",
       });
     }
 
@@ -145,159 +193,278 @@ export const processAttack = async (req, res) => {
 
       return res.status(400).json({
         success: false,
-        message: "There is no active team turn.",
+        message:
+          "There is no active team turn.",
       });
     }
 
-    if (!Array.isArray(game.turnQueue) || game.turnQueue.length === 0) {
+    if (
+      !Array.isArray(
+        game.turnQueue
+      ) ||
+      game.turnQueue.length === 0
+    ) {
       await session.abortTransaction();
 
       return res.status(400).json({
         success: false,
-        message: "The turn queue is empty.",
+        message:
+          "The turn queue is empty.",
       });
     }
 
-    const attackingTeamId = game.currentTurnTeam.toString();
-    const normalizedTargetTeamId = targetTeamId.toString();
+    const attackingTeamId =
+      game.currentTurnTeam.toString();
 
-    if (attackingTeamId === normalizedTargetTeamId) {
+    const normalizedTargetTeamId =
+      targetTeamId.toString();
+
+    /*
+     * Rule 1:
+     *
+     * Team cannot attack itself.
+     */
+    if (
+      attackingTeamId ===
+      normalizedTargetTeamId
+    ) {
       await session.abortTransaction();
 
       return res.status(400).json({
         success: false,
-        message: "A team cannot attack its own board.",
+        message:
+          "A team cannot attack its own board.",
       });
     }
 
-    const targetBelongsToGame = game.teams.some(
-      (teamId) =>
-        teamId.toString() === normalizedTargetTeamId
-    );
+    /*
+     * Target must belong to this game.
+     */
+    const targetBelongsToGame =
+      game.teams.some(
+        (teamId) =>
+          teamId.toString() ===
+          normalizedTargetTeamId
+      );
 
     if (!targetBelongsToGame) {
       await session.abortTransaction();
 
       return res.status(400).json({
         success: false,
-        message: "The selected team does not belong to this game.",
+        message:
+          "The selected team does not belong to this game.",
       });
     }
 
-    const normalizedCoordinate =
-      normalizeCoordinate(coordinate);
+    /*
+     * Rule 2:
+     *
+     * Cannot attack the SAME team
+     * twice consecutively.
+     *
+     * Allowed:
+     *
+     * Red -> Blue
+     * Red -> Green
+     * Red -> Blue
+     *
+     * Blocked:
+     *
+     * Red -> Blue
+     * Red -> Blue
+     */
+    const previousAttack =
+      await attackModel
+        .findOne({
+          game: game._id,
+          round: game.currentRound,
+          attackingTeam:
+            attackingTeamId,
+        })
+        .sort({
+          createdAt: -1,
+        })
+        .session(session);
 
     if (
+      previousAttack &&
+      previousAttack.targetTeam.toString() ===
+        normalizedTargetTeamId
+    ) {
+      await session.abortTransaction();
+
+      return res.status(409).json({
+        success: false,
+        message:
+          "You cannot attack the same team twice in a row. Choose another team first.",
+      });
+    }
+
+    /*
+     * Normalize coordinate.
+     */
+    const normalizedCoordinate =
+      normalizeCoordinate(
+        coordinate
+      );
+
+    /*
+     * Validate coordinate.
+     */
+    if (
       !isCoordinateValid({
-        coordinate: normalizedCoordinate,
-        boardSize: game.boardSize,
+        coordinate:
+          normalizedCoordinate,
+        boardSize:
+          game.boardSize,
       })
     ) {
-      const finalRow = String.fromCharCode(
-        64 + game.boardSize
-      );
+      const finalRow =
+        String.fromCharCode(
+          64 + game.boardSize
+        );
 
       await session.abortTransaction();
 
       return res.status(400).json({
         success: false,
-        message: `Coordinate must be between A1 and ${finalRow}${game.boardSize}.`,
+        message:
+          `Coordinate must be between A1 and ${finalRow}${game.boardSize}.`,
       });
     }
 
-    const attackingTeam = await teamModel
-      .findOne({
-        _id: attackingTeamId,
-        game: game._id,
-      })
-      .session(session);
+    /*
+     * Load attacking team.
+     */
+    const attackingTeam =
+      await teamModel
+        .findOne({
+          _id: attackingTeamId,
+          game: game._id,
+        })
+        .session(session);
 
     if (!attackingTeam) {
       await session.abortTransaction();
 
       return res.status(404).json({
         success: false,
-        message: "Attacking team not found.",
+        message:
+          "Attacking team not found.",
       });
     }
 
-    if (attackingTeam.attacksRemaining <= 0) {
+    /*
+     * Team must have attacks remaining.
+     */
+    if (
+      attackingTeam.attacksRemaining <=
+      0
+    ) {
       await session.abortTransaction();
 
       return res.status(400).json({
         success: false,
-        message: "The current team has no attacks remaining.",
+        message:
+          "The current team has no attacks remaining.",
       });
     }
 
-    const targetTeam = await teamModel
-      .findOne({
-        _id: normalizedTargetTeamId,
-        game: game._id,
-      })
-      .session(session);
+    /*
+     * Load target team.
+     */
+    const targetTeam =
+      await teamModel
+        .findOne({
+          _id:
+            normalizedTargetTeamId,
+          game: game._id,
+        })
+        .session(session);
 
     if (!targetTeam) {
       await session.abortTransaction();
 
       return res.status(404).json({
         success: false,
-        message: "Target team not found.",
+        message:
+          "Target team not found.",
       });
     }
 
     /*
-     * The ships field uses select: false in boardModel.
-     * It is requested here only because the server must privately
-     * determine whether the selected coordinate is a hit.
+     * Load hidden ship information.
      */
-    const targetBoard = await boardModel
-      .findOne({
-        game: game._id,
-        team: normalizedTargetTeamId,
-      })
-      .select("+ships")
-      .session(session);
+    const targetBoard =
+      await boardModel
+        .findOne({
+          game: game._id,
+          team:
+            normalizedTargetTeamId,
+        })
+        .select("+ships")
+        .session(session);
 
     if (!targetBoard) {
       await session.abortTransaction();
 
       return res.status(404).json({
         success: false,
-        message: "Target board not found.",
+        message:
+          "Target board not found.",
       });
     }
 
+    /*
+     * A board coordinate cannot be
+     * attacked more than once.
+     */
     const coordinateWasAlreadyAttacked =
       targetBoard.attackedCells.some(
         (cell) =>
-          cell.coordinate === normalizedCoordinate
+          cell.coordinate ===
+          normalizedCoordinate
       );
 
-    if (coordinateWasAlreadyAttacked) {
+    if (
+      coordinateWasAlreadyAttacked
+    ) {
       await session.abortTransaction();
 
       return res.status(409).json({
         success: false,
-        message: "This coordinate has already been attacked.",
+        message:
+          "This coordinate has already been attacked.",
       });
     }
 
     let result = "miss";
+
     let shipSunk = false;
+
     let allShipsSunk = false;
+
     let pointsAwarded = 0;
 
-    const hitShip = targetBoard.ships.find(
-      (ship) =>
-        ship.coordinates.includes(
-          normalizedCoordinate
-        )
-    );
+    /*
+     * Find a ship occupying
+     * this coordinate.
+     */
+    const hitShip =
+      targetBoard.ships.find(
+        (ship) =>
+          ship.coordinates.includes(
+            normalizedCoordinate
+          )
+      );
 
     if (hitShip) {
       result = "hit";
 
+      /*
+       * Register hit.
+       */
       if (
         !hitShip.hits.includes(
           normalizedCoordinate
@@ -308,10 +475,15 @@ export const processAttack = async (req, res) => {
         );
       }
 
+      /*
+       * Determine if ship has sunk.
+       */
       const everyCoordinateWasHit =
         hitShip.coordinates.every(
           (shipCoordinate) =>
-            hitShip.hits.includes(shipCoordinate)
+            hitShip.hits.includes(
+              shipCoordinate
+            )
         );
 
       if (
@@ -319,72 +491,137 @@ export const processAttack = async (req, res) => {
         !hitShip.sunk
       ) {
         hitShip.sunk = true;
+
         shipSunk = true;
       }
 
+      /*
+       * Base hit points.
+       */
       pointsAwarded +=
         game.scoreRules.hitPoints;
 
+      /*
+       * Sunk bonus.
+       */
       if (shipSunk) {
         pointsAwarded +=
           game.scoreRules.sunkPoints;
 
-        targetTeam.shipsRemaining = Math.max(
-          0,
-          targetTeam.shipsRemaining - 1
-        );
+        targetTeam.shipsRemaining =
+          Math.max(
+            0,
+            targetTeam.shipsRemaining -
+              1
+          );
       }
 
-      allShipsSunk = targetBoard.ships.every(
-        (ship) => ship.sunk
-      );
+      /*
+       * Check if all target ships
+       * are destroyed.
+       */
+      allShipsSunk =
+        targetBoard.ships.every(
+          (ship) => ship.sunk
+        );
 
-      if (allShipsSunk && shipSunk) {
+      /*
+       * Final fleet bonus.
+       */
+      if (
+        allShipsSunk &&
+        shipSunk
+      ) {
         pointsAwarded +=
-          game.scoreRules.finalShipPoints;
+          game.scoreRules
+            .finalShipPoints;
       }
     }
 
-    attackingTeam.score += pointsAwarded;
+    /*
+     * Award points.
+     */
+    attackingTeam.score +=
+      pointsAwarded;
 
-    attackingTeam.attacksRemaining = Math.max(
-      0,
-      attackingTeam.attacksRemaining - 1
-    );
+    /*
+     * Consume one attack.
+     */
+    attackingTeam.attacksRemaining =
+      Math.max(
+        0,
+        attackingTeam.attacksRemaining -
+          1
+      );
 
+    /*
+     * Store attacked cell.
+     */
     targetBoard.attackedCells.push({
-      coordinate: normalizedCoordinate,
+      coordinate:
+        normalizedCoordinate,
+
       result,
-      attackedBy: attackingTeam._id,
-      round: game.currentRound,
-      attackedAt: new Date(),
+
+      attackedBy:
+        attackingTeam._id,
+
+      round:
+        game.currentRound,
+
+      attackedAt:
+        new Date(),
     });
 
-    const createdAttacks = await attackModel.create(
-      [
-        {
-          game: game._id,
-          round: game.currentRound,
-          attackingTeam: attackingTeam._id,
-          targetTeam: targetTeam._id,
-          coordinate: normalizedCoordinate,
-          result,
-          shipSunk,
-          allShipsSunk,
-          pointsAwarded,
-          createdBy: req.userId,
-        },
-      ],
-      {
-        session,
-      }
-    );
+    /*
+     * Save attack history.
+     */
+    const createdAttacks =
+      await attackModel.create(
+        [
+          {
+            game: game._id,
 
+            round:
+              game.currentRound,
+
+            attackingTeam:
+              attackingTeam._id,
+
+            targetTeam:
+              targetTeam._id,
+
+            coordinate:
+              normalizedCoordinate,
+
+            result,
+
+            shipSunk,
+
+            allShipsSunk,
+
+            pointsAwarded,
+
+            createdBy:
+              req.userId,
+          },
+        ],
+        {
+          session,
+        }
+      );
+
+    /*
+     * Move to next queued attack.
+     */
     await advanceTurn({
       game,
       session,
     });
 
+    /*
+     * Save changes.
+     */
     await Promise.all([
       attackingTeam.save({
         session,
@@ -405,59 +642,101 @@ export const processAttack = async (req, res) => {
 
     await session.commitTransaction();
 
-    const publicGame = await populateGameState(
-      game._id
-    );
+    /*
+     * Safe public game state.
+     */
+    const publicGame =
+      await populateGameState(
+        game._id
+      );
 
-    const createdAttack = createdAttacks[0];
+    const createdAttack =
+      createdAttacks[0];
 
     const publicAttack = {
       id: createdAttack._id,
-      round: createdAttack.round,
-      attackingTeam: attackingTeam._id,
-      targetTeam: targetTeam._id,
-      coordinate: normalizedCoordinate,
+
+      round:
+        createdAttack.round,
+
+      attackingTeam:
+        attackingTeam._id,
+
+      targetTeam:
+        targetTeam._id,
+
+      coordinate:
+        normalizedCoordinate,
+
       result,
+
       shipSunk,
+
       allShipsSunk,
+
       pointsAwarded,
-      createdAt: createdAttack.createdAt,
+
+      createdAt:
+        createdAttack.createdAt,
     };
 
+    /*
+     * Socket update.
+     */
     if (req.io) {
       req.io
         .to(`game:${gameId}`)
-        .emit("attack:resolved", {
-          attack: publicAttack,
-          game: publicGame,
-        });
+        .emit(
+          "attack:resolved",
+          {
+            attack:
+              publicAttack,
+
+            game:
+              publicGame,
+          }
+        );
     }
 
     return res.status(200).json({
       success: true,
+
       message:
         result === "hit"
           ? "Attack resulted in a hit."
           : "Attack resulted in a miss.",
-      attack: publicAttack,
-      game: publicGame,
+
+      attack:
+        publicAttack,
+
+      game:
+        publicGame,
     });
   } catch (error) {
-    if (session.inTransaction()) {
+    if (
+      session.inTransaction()
+    ) {
       await session.abortTransaction();
     }
 
-    if (error.code === 11000) {
+    if (
+      error.code === 11000
+    ) {
       return res.status(409).json({
         success: false,
-        message: "This coordinate has already been attacked.",
+        message:
+          "This coordinate has already been attacked.",
       });
     }
 
-    console.error("Process attack error:", error);
+    console.error(
+      "Process attack error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
+
       message:
         error.message ||
         "Could not process the attack.",
@@ -470,308 +749,553 @@ export const processAttack = async (req, res) => {
 /**
  * GET /api/attacks/games/:gameId/state
  *
- * Returns only public projector information.
- * Ship coordinates are never returned.
+ * Returns projector-safe information.
+ *
+ * Ship coordinates are NOT exposed.
  */
-export const getProjectorState = async (
-  req,
-  res
-) => {
-  try {
-    const { gameId } = req.params;
+export const getProjectorState =
+  async (req, res) => {
+    try {
+      const { gameId } =
+        req.params;
 
-    if (!mongoose.isValidObjectId(gameId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid game ID.",
-      });
-    }
+      if (
+        !mongoose.isValidObjectId(
+          gameId
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Invalid game ID.",
+        });
+      }
 
-    const game = await gameModel
-      .findOne({
-        _id: gameId,
-        createdBy: req.userId,
-      })
-      .populate({
-        path: "teams",
-        select:
-          "name color score attacksRemaining shipsRemaining turnPosition",
-        options: {
-          sort: {
-            turnPosition: 1,
+      /*
+       * Load game.
+       */
+      const game =
+        await gameModel
+          .findOne({
+            _id: gameId,
+
+            createdBy:
+              req.userId,
+          })
+          .populate({
+            path: "teams",
+
+            select:
+              "name color score attacksRemaining shipsRemaining turnPosition",
+
+            options: {
+              sort: {
+                turnPosition:
+                  1,
+              },
+            },
+          })
+          .populate({
+            path:
+              "currentTurnTeam",
+
+            select:
+              "name color score attacksRemaining shipsRemaining turnPosition",
+          });
+
+      if (!game) {
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message:
+              "Game not found.",
+          });
+      }
+
+      /*
+       * Public boards.
+       *
+       * Do NOT expose ships.
+       */
+      const boards =
+        await boardModel
+          .find({
+            game: game._id,
+          })
+          .select(
+            "team size attackedCells"
+          )
+          .populate({
+            path: "team",
+
+            select:
+              "name color score attacksRemaining shipsRemaining turnPosition",
+          });
+
+      /*
+       * Attack history for projector.
+       */
+      const recentAttacks =
+        await attackModel
+          .find({
+            game: game._id,
+          })
+          .sort({
+            createdAt: -1,
+          })
+          .limit(20)
+          .populate({
+            path:
+              "attackingTeam",
+
+            select:
+              "name color",
+          })
+          .populate({
+            path:
+              "targetTeam",
+
+            select:
+              "name color",
+          });
+
+      /*
+       * Only the LAST target is temporarily
+       * disabled for the current team.
+       *
+       * Example:
+       *
+       * Red -> Blue
+       *
+       * Blue becomes temporarily unavailable.
+       *
+       * Red -> Green
+       *
+       * Green becomes unavailable and
+       * Blue becomes available again.
+       */
+      let lastTargetTeamId = null;
+
+      if (
+        game.currentTurnTeam
+      ) {
+        const currentTeamId =
+          game.currentTurnTeam._id
+            ? game.currentTurnTeam._id
+            : game.currentTurnTeam;
+
+        const previousAttack =
+          await attackModel
+            .findOne({
+              game: game._id,
+
+              round:
+                game.currentRound,
+
+              attackingTeam:
+                currentTeamId,
+            })
+            .sort({
+              createdAt: -1,
+            })
+            .select(
+              "targetTeam"
+            );
+
+        if (previousAttack) {
+          lastTargetTeamId =
+            previousAttack.targetTeam.toString();
+        }
+      }
+
+      /*
+       * Keep boards ordered by team.
+       */
+      const sortedBoards =
+        boards.sort(
+          (
+            firstBoard,
+            secondBoard
+          ) =>
+            (firstBoard.team
+              ?.turnPosition ??
+              0) -
+            (secondBoard.team
+              ?.turnPosition ??
+              0)
+        );
+
+      return res
+        .status(200)
+        .json({
+          success: true,
+
+          game: {
+            id: game._id,
+
+            name:
+              game.name,
+
+            boardSize:
+              game.boardSize,
+
+            currentRound:
+              game.currentRound,
+
+            totalRounds:
+              game.totalRounds,
+
+            phase:
+              game.phase,
+
+            status:
+              game.status,
+
+            currentTurnTeam:
+              game.currentTurnTeam,
+
+            turnEndsAt:
+              game.turnEndsAt,
+
+            turnDurationSeconds:
+              game.turnDurationSeconds,
+
+            remainingTurns:
+              game.turnQueue.length,
+
+            teams:
+              game.teams,
+
+            /*
+             * Frontend uses this to
+             * temporarily disable only
+             * the previous target.
+             */
+            lastTargetTeamId,
           },
-        },
-      })
-      .populate({
-        path: "currentTurnTeam",
-        select:
-          "name color score attacksRemaining shipsRemaining turnPosition",
-      });
 
-    if (!game) {
-      return res.status(404).json({
-        success: false,
-        message: "Game not found.",
-      });
+          boards:
+            sortedBoards.map(
+              (board) => ({
+                id:
+                  board._id,
+
+                size:
+                  board.size,
+
+                team:
+                  board.team,
+
+                attackedCells:
+                  board.attackedCells.map(
+                    (
+                      cell
+                    ) => ({
+                      coordinate:
+                        cell.coordinate,
+
+                      result:
+                        cell.result,
+
+                      attackedBy:
+                        cell.attackedBy,
+
+                      round:
+                        cell.round,
+
+                      attackedAt:
+                        cell.attackedAt,
+                    })
+                  ),
+              })
+            ),
+
+          recentAttacks:
+            recentAttacks.map(
+              (attack) => ({
+                id:
+                  attack._id,
+
+                round:
+                  attack.round,
+
+                attackingTeam:
+                  attack.attackingTeam,
+
+                targetTeam:
+                  attack.targetTeam,
+
+                coordinate:
+                  attack.coordinate,
+
+                result:
+                  attack.result,
+
+                shipSunk:
+                  attack.shipSunk,
+
+                allShipsSunk:
+                  attack.allShipsSunk,
+
+                pointsAwarded:
+                  attack.pointsAwarded,
+
+                createdAt:
+                  attack.createdAt,
+              })
+            ),
+        });
+    } catch (error) {
+      console.error(
+        "Get projector state error:",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+
+          message:
+            error.message ||
+            "Could not retrieve projector state.",
+        });
     }
-
-    /*
-     * Explicitly request only public board fields.
-     * Do not add ships to this query.
-     */
-    const boards = await boardModel
-      .find({
-        game: game._id,
-      })
-      .select("team size attackedCells")
-      .populate({
-        path: "team",
-        select:
-          "name color score attacksRemaining shipsRemaining turnPosition",
-      });
-
-    const recentAttacks = await attackModel
-      .find({
-        game: game._id,
-      })
-      .sort({
-        createdAt: -1,
-      })
-      .limit(8)
-      .populate({
-        path: "attackingTeam",
-        select: "name color",
-      })
-      .populate({
-        path: "targetTeam",
-        select: "name color",
-      });
-
-    const sortedBoards = boards.sort(
-      (firstBoard, secondBoard) =>
-        (firstBoard.team?.turnPosition ?? 0) -
-        (secondBoard.team?.turnPosition ?? 0)
-    );
-
-    return res.status(200).json({
-      success: true,
-
-      game: {
-        id: game._id,
-        name: game.name,
-        boardSize: game.boardSize,
-        currentRound: game.currentRound,
-        totalRounds: game.totalRounds,
-        phase: game.phase,
-        status: game.status,
-        currentTurnTeam:
-          game.currentTurnTeam,
-        turnEndsAt: game.turnEndsAt,
-        turnDurationSeconds:
-          game.turnDurationSeconds,
-        remainingTurns:
-          game.turnQueue.length,
-        teams: game.teams,
-      },
-
-      boards: sortedBoards.map((board) => ({
-        id: board._id,
-        size: board.size,
-        team: board.team,
-
-        attackedCells:
-          board.attackedCells.map((cell) => ({
-            coordinate: cell.coordinate,
-            result: cell.result,
-            attackedBy: cell.attackedBy,
-            round: cell.round,
-            attackedAt: cell.attackedAt,
-          })),
-      })),
-
-      recentAttacks: recentAttacks.map(
-        (attack) => ({
-          id: attack._id,
-          round: attack.round,
-          attackingTeam:
-            attack.attackingTeam,
-          targetTeam: attack.targetTeam,
-          coordinate: attack.coordinate,
-          result: attack.result,
-          shipSunk: attack.shipSunk,
-          allShipsSunk:
-            attack.allShipsSunk,
-          pointsAwarded:
-            attack.pointsAwarded,
-          createdAt: attack.createdAt,
-        })
-      ),
-    });
-  } catch (error) {
-    console.error(
-      "Get projector state error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      message:
-        error.message ||
-        "Could not retrieve projector state.",
-    });
-  }
-};
+  };
 
 /**
  * POST /api/attacks/games/:gameId/skip
  *
- * Uses one attack from the current team and advances
- * to the next team without creating an Attack document.
+ * Uses one attack and moves to
+ * the next queued attack.
  */
-export const skipCurrentTurn = async (
-  req,
-  res
-) => {
-  const session = await mongoose.startSession();
+export const skipCurrentTurn =
+  async (req, res) => {
+    const session =
+      await mongoose.startSession();
 
-  try {
-    session.startTransaction();
+    try {
+      session.startTransaction();
 
-    const { gameId } = req.params;
+      const { gameId } =
+        req.params;
 
-    if (!mongoose.isValidObjectId(gameId)) {
-      await session.abortTransaction();
+      if (
+        !mongoose.isValidObjectId(
+          gameId
+        )
+      ) {
+        await session.abortTransaction();
 
-      return res.status(400).json({
-        success: false,
-        message: "Invalid game ID.",
-      });
-    }
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              "Invalid game ID.",
+          });
+      }
 
-    const game = await gameModel
-      .findOne({
-        _id: gameId,
-        createdBy: req.userId,
-      })
-      .session(session);
+      const game =
+        await gameModel
+          .findOne({
+            _id: gameId,
 
-    if (!game) {
-      await session.abortTransaction();
+            createdBy:
+              req.userId,
+          })
+          .session(session);
 
-      return res.status(404).json({
-        success: false,
-        message: "Game not found.",
-      });
-    }
+      if (!game) {
+        await session.abortTransaction();
 
-    if (
-      game.phase !== "attack" ||
-      !game.currentTurnTeam
-    ) {
-      await session.abortTransaction();
+        return res
+          .status(404)
+          .json({
+            success: false,
+            message:
+              "Game not found.",
+          });
+      }
 
-      return res.status(400).json({
-        success: false,
-        message: "There is no active turn to skip.",
-      });
-    }
+      if (
+        game.phase !==
+          "attack" ||
+        !game.currentTurnTeam
+      ) {
+        await session.abortTransaction();
 
-    if (
-      !Array.isArray(game.turnQueue) ||
-      game.turnQueue.length === 0
-    ) {
-      await session.abortTransaction();
+        return res
+          .status(400)
+          .json({
+            success: false,
 
-      return res.status(400).json({
-        success: false,
-        message: "The turn queue is empty.",
-      });
-    }
+            message:
+              "There is no active turn to skip.",
+          });
+      }
 
-    const skippedTeam = await teamModel
-      .findOne({
-        _id: game.currentTurnTeam,
-        game: game._id,
-      })
-      .session(session);
+      if (
+        !Array.isArray(
+          game.turnQueue
+        ) ||
+        game.turnQueue.length ===
+          0
+      ) {
+        await session.abortTransaction();
 
-    if (!skippedTeam) {
-      await session.abortTransaction();
+        return res
+          .status(400)
+          .json({
+            success: false,
 
-      return res.status(404).json({
-        success: false,
-        message: "Current team not found.",
-      });
-    }
+            message:
+              "The turn queue is empty.",
+          });
+      }
 
-    if (skippedTeam.attacksRemaining <= 0) {
-      await session.abortTransaction();
+      /*
+       * Load current team.
+       */
+      const skippedTeam =
+        await teamModel
+          .findOne({
+            _id:
+              game.currentTurnTeam,
 
-      return res.status(400).json({
-        success: false,
-        message:
-          "The current team has no attacks remaining.",
-      });
-    }
+            game:
+              game._id,
+          })
+          .session(session);
 
-    skippedTeam.attacksRemaining = Math.max(
-      0,
-      skippedTeam.attacksRemaining - 1
-    );
+      if (!skippedTeam) {
+        await session.abortTransaction();
 
-    await advanceTurn({
-      game,
-      session,
-    });
+        return res
+          .status(404)
+          .json({
+            success: false,
 
-    await Promise.all([
-      skippedTeam.save({
+            message:
+              "Current team not found.",
+          });
+      }
+
+      /*
+       * Team must still have
+       * an attack available.
+       */
+      if (
+        skippedTeam.attacksRemaining <=
+        0
+      ) {
+        await session.abortTransaction();
+
+        return res
+          .status(400)
+          .json({
+            success: false,
+
+            message:
+              "The current team has no attacks remaining.",
+          });
+      }
+
+      /*
+       * Skipping consumes one attack.
+       */
+      skippedTeam.attacksRemaining =
+        Math.max(
+          0,
+
+          skippedTeam.attacksRemaining -
+            1
+        );
+
+      /*
+       * Move to next queued attack.
+       */
+      await advanceTurn({
+        game,
         session,
-      }),
+      });
 
-      game.save({
-        session,
-      }),
-    ]);
+      await Promise.all([
+        skippedTeam.save({
+          session,
+        }),
 
-    await session.commitTransaction();
+        game.save({
+          session,
+        }),
+      ]);
 
-    const publicGame = await populateGameState(
-      game._id
-    );
+      await session.commitTransaction();
 
-    if (req.io) {
-      req.io
-        .to(`game:${gameId}`)
-        .emit("turn:skipped", {
-          skippedTeamId: skippedTeam._id,
-          game: publicGame,
+      const publicGame =
+        await populateGameState(
+          game._id
+        );
+
+      if (req.io) {
+        req.io
+          .to(
+            `game:${gameId}`
+          )
+          .emit(
+            "turn:skipped",
+            {
+              skippedTeamId:
+                skippedTeam._id,
+
+              game:
+                publicGame,
+            }
+          );
+      }
+
+      return res
+        .status(200)
+        .json({
+          success: true,
+
+          message:
+            `${skippedTeam.name}'s turn was skipped.`,
+
+          skippedTeam: {
+            id:
+              skippedTeam._id,
+
+            name:
+              skippedTeam.name,
+          },
+
+          game:
+            publicGame,
         });
+    } catch (error) {
+      if (
+        session.inTransaction()
+      ) {
+        await session.abortTransaction();
+      }
+
+      console.error(
+        "Skip turn error:",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+
+          message:
+            error.message ||
+            "Could not skip the current turn.",
+        });
+    } finally {
+      session.endSession();
     }
-
-    return res.status(200).json({
-      success: true,
-      message: `${skippedTeam.name}'s turn was skipped.`,
-      skippedTeam: {
-        id: skippedTeam._id,
-        name: skippedTeam.name,
-      },
-      game: publicGame,
-    });
-  } catch (error) {
-    if (session.inTransaction()) {
-      await session.abortTransaction();
-    }
-
-    console.error("Skip turn error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message:
-        error.message ||
-        "Could not skip the current turn.",
-    });
-  } finally {
-    session.endSession();
-  }
-};
+  };

@@ -36,7 +36,7 @@ const validateAttackEntries = ({
       throw new Error("A team was included more than once.");
     }
 
-    if (!Number.isInteger(attacks) || attacks < 0 || attacks > 20) {
+    if (!Number.isInteger(attacks) || attacks < 0 || attacks > 2000) {
       throw new Error(
         "Attacks must be whole numbers between 0 and 20."
       );

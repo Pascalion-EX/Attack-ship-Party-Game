@@ -54,7 +54,7 @@ const shipConfigurations = {
     },
     {
       name: "Battleship",
-      size: 4,
+      size: 3,
     },
     {
       name: "Cruiser",

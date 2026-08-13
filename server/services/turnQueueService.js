@@ -5,7 +5,7 @@ export const generateAlternatingTurnQueue = (teamAttackEntries) => {
 
   const normalizedEntries = teamAttackEntries.map((entry) => ({
     teamId: String(entry.teamId),
-    attacksRemaining: Number(entry.attacks),
+    attacks: Number(entry.attacks),
     turnPosition: Number(entry.turnPosition ?? 0),
   }));
 
@@ -15,30 +15,51 @@ export const generateAlternatingTurnQueue = (teamAttackEntries) => {
     }
 
     if (
-      !Number.isInteger(entry.attacksRemaining) ||
-      entry.attacksRemaining < 0
+      !Number.isInteger(entry.attacks) ||
+      entry.attacks < 0
     ) {
-      throw new Error("Attacks must be non-negative whole numbers.");
+      throw new Error(
+        "Attacks must be non-negative whole numbers."
+      );
+    }
+
+    if (entry.attacks > 3) {
+      throw new Error(
+        "A team cannot receive more than 3 attacks per round."
+      );
     }
   }
 
   normalizedEntries.sort(
-    (first, second) => first.turnPosition - second.turnPosition
+    (first, second) =>
+      first.turnPosition - second.turnPosition
   );
 
   const queue = [];
 
-  let attacksStillAvailable = true;
-
-  while (attacksStillAvailable) {
-    attacksStillAvailable = false;
-
-    for (const entry of normalizedEntries) {
-      if (entry.attacksRemaining > 0) {
-        queue.push(entry.teamId);
-        entry.attacksRemaining -= 1;
-        attacksStillAvailable = true;
-      }
+  /*
+   * Put all attacks for one team together.
+   *
+   * Example:
+   *
+   * Red = 3
+   * Blue = 2
+   * Green = 1
+   * Yellow = 2
+   *
+   * Queue:
+   * Red, Red, Red,
+   * Blue, Blue,
+   * Green,
+   * Yellow, Yellow
+   */
+  for (const entry of normalizedEntries) {
+    for (
+      let attackNumber = 0;
+      attackNumber < entry.attacks;
+      attackNumber += 1
+    ) {
+      queue.push(entry.teamId);
     }
   }
 
