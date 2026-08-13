@@ -209,14 +209,14 @@ export const createGame = async (
         normalizedTotalRounds
       ) ||
       normalizedTotalRounds < 1 ||
-      normalizedTotalRounds > 50
+      normalizedTotalRounds > 5000
     ) {
       await session.abortTransaction();
 
       return res.status(400).json({
         success: false,
         message:
-          "Total rounds must be between 1 and 50.",
+          "Total rounds must be between 1 and 5000.",
       });
     }
 
