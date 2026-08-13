@@ -14,16 +14,43 @@ dotenv.config();
 
 const app = express();
 
+/*
+ * Database connection.
+ *
+ * connectDB() should reuse an existing MongoDB/Mongoose
+ * connection when possible because Vercel runs the backend
+ * using serverless functions.
+ */
 await connectDB();
 
 /*
- * Global middleware must be registered before routes.
+ * Allowed frontend origins.
+ */
+const allowedOrigins = [
+  "http://localhost:5173",
+  process.env.CLIENT_URL,
+].filter(Boolean);
+
+/*
+ * CORS
  */
 app.use(
   cors({
-    origin:
-      process.env.CLIENT_URL ||
-      "http://localhost:5173",
+    origin: (origin, callback) => {
+      // Allow requests without an Origin header
+      // e.g. Postman/server-to-server requests.
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(
+        new Error(`CORS blocked request from: ${origin}`)
+      );
+    },
 
     credentials: true,
 
@@ -43,6 +70,9 @@ app.use(
   })
 );
 
+/*
+ * Request parsers.
+ */
 app.use(
   express.json({
     limit: "1mb",
@@ -52,24 +82,25 @@ app.use(
 app.use(
   express.urlencoded({
     extended: true,
+    limit: "1mb",
   })
 );
 
 app.use(cookieParser());
 
 /*
- * Basic server test route.
+ * Health check.
  */
 app.get("/", (req, res) => {
   return res.status(200).json({
     success: true,
     message: "Attackship API is running.",
+    environment: process.env.NODE_ENV || "development",
   });
 });
 
 /*
- * API routes must come after cookieParser,
- * express.json, and CORS.
+ * API routes.
  */
 app.use("/api/auth", authRouter);
 app.use("/api/games", gameRouter);
@@ -77,7 +108,7 @@ app.use("/api/rounds", roundRouter);
 app.use("/api/attacks", attackRouter);
 
 /*
- * Unknown route handler.
+ * Unknown routes.
  */
 app.use((req, res) => {
   return res.status(404).json({
@@ -95,12 +126,26 @@ app.use((error, req, res, next) => {
   return res.status(error.status || 500).json({
     success: false,
     message:
-      error.message || "Internal server error.",
+      process.env.NODE_ENV === "production"
+        ? "Internal server error."
+        : error.message || "Internal server error.",
   });
 });
 
-const PORT = process.env.PORT || 4000;
+/*
+ * Start normal Express server only during local development.
+ *
+ * Vercel handles the HTTP server itself in production.
+ */
+if (!process.env.VERCEL) {
+  const PORT = process.env.PORT || 4000;
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
+
+/*
+ * Required for Vercel.
+ */
+export default app;
