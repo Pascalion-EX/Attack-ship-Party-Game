@@ -818,20 +818,19 @@ export const getProjectorState =
        *
        * Do NOT expose ships.
        */
-      const boards =
-        await boardModel
-          .find({
-            game: game._id,
-          })
-          .select(
-            "team size attackedCells"
-          )
-          .populate({
-            path: "team",
-
-            select:
-              "name color score attacksRemaining shipsRemaining turnPosition",
-          });
+const boards =
+  await boardModel
+    .find({
+      game: game._id,
+    })
+    .select(
+      "team size attackedCells +ships"
+    )
+    .populate({
+      path: "team",
+      select:
+        "name color score attacksRemaining shipsRemaining turnPosition",
+    });
 
       /*
        * Attack history for projector.
@@ -975,41 +974,54 @@ export const getProjectorState =
             lastTargetTeamId,
           },
 
-          boards:
-            sortedBoards.map(
-              (board) => ({
-                id:
-                  board._id,
+         boards:
+  sortedBoards.map((board) => {
+    /*
+     * Only expose coordinates belonging
+     * to ships that have already sunk.
+     *
+     * Unsunk ship positions remain hidden.
+     */
+    const sunkCoordinates =
+      board.ships
+        .filter(
+          (ship) => ship.sunk
+        )
+        .flatMap(
+          (ship) =>
+            ship.coordinates
+        );
 
-                size:
-                  board.size,
+    return {
+      id: board._id,
 
-                team:
-                  board.team,
+      size: board.size,
 
-                attackedCells:
-                  board.attackedCells.map(
-                    (
-                      cell
-                    ) => ({
-                      coordinate:
-                        cell.coordinate,
+      team: board.team,
 
-                      result:
-                        cell.result,
+      sunkCoordinates,
 
-                      attackedBy:
-                        cell.attackedBy,
+      attackedCells:
+        board.attackedCells.map(
+          (cell) => ({
+            coordinate:
+              cell.coordinate,
 
-                      round:
-                        cell.round,
+            result:
+              cell.result,
 
-                      attackedAt:
-                        cell.attackedAt,
-                    })
-                  ),
-              })
-            ),
+            attackedBy:
+              cell.attackedBy,
+
+            round:
+              cell.round,
+
+            attackedAt:
+              cell.attackedAt,
+          })
+        ),
+    };
+  }),
 
           recentAttacks:
             recentAttacks.map(

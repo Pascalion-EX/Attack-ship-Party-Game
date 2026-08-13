@@ -6,6 +6,12 @@ const PublicBoard = ({
   disabled,
   onSelectCoordinate,
 }) => {
+  /*
+   * Stores attacked coordinates:
+   *
+   * A1 -> hit
+   * B3 -> miss
+   */
   const attackedCells = new Map(
     board.attackedCells.map((cell) => [
       cell.coordinate,
@@ -13,15 +19,50 @@ const PublicBoard = ({
     ])
   );
 
-  const getCellClass = (status) => {
+  /*
+   * Coordinates belonging to ships
+   * that have been completely sunk.
+   *
+   * Example:
+   * ["B2", "B3", "B4"]
+   */
+  const sunkCoordinates = new Set(
+    board.sunkCoordinates || []
+  );
+
+  const getCellClass = (
+    status,
+    coordinate
+  ) => {
+    /*
+     * Fully sunk ship cell.
+     *
+     * Purple overrides normal hit red.
+     */
+    if (
+      status === "hit" &&
+      sunkCoordinates.has(coordinate)
+    ) {
+      return "border-violet-400 bg-violet-600 text-white";
+    }
+
+    /*
+     * Normal hit.
+     */
     if (status === "hit") {
       return "border-red-400 bg-red-500 text-white";
     }
 
+    /*
+     * Miss.
+     */
     if (status === "miss") {
       return "border-slate-500 bg-slate-700 text-slate-200";
     }
 
+    /*
+     * Empty / untouched cell.
+     */
     return "border-slate-700 bg-slate-900 text-slate-400 hover:border-cyan-400 hover:bg-slate-800";
   };
 
@@ -38,7 +79,8 @@ const PublicBoard = ({
           <span
             className="h-4 w-4 rounded-full"
             style={{
-              backgroundColor: board.team.color,
+              backgroundColor:
+                board.team.color,
             }}
           />
 
@@ -61,7 +103,9 @@ const PublicBoard = ({
         <div />
 
         {Array.from(
-          { length: board.size },
+          {
+            length: board.size,
+          },
           (_, columnIndex) => (
             <div
               key={`column-${columnIndex}`}
@@ -73,7 +117,9 @@ const PublicBoard = ({
         )}
 
         {Array.from(
-          { length: board.size },
+          {
+            length: board.size,
+          },
           (_, rowIndex) => {
             const rowLetter =
               alphabet[rowIndex];
@@ -88,17 +134,28 @@ const PublicBoard = ({
                 </div>
 
                 {Array.from(
-                  { length: board.size },
+                  {
+                    length: board.size,
+                  },
                   (_, columnIndex) => {
-                    const coordinate = `${rowLetter}${
-                      columnIndex + 1
-                    }`;
+                    const coordinate =
+                      `${rowLetter}${
+                        columnIndex + 1
+                      }`;
 
                     const status =
-                      attackedCells.get(coordinate);
+                      attackedCells.get(
+                        coordinate
+                      );
 
                     const alreadyAttacked =
                       Boolean(status);
+
+                    const isSunkCell =
+                      status === "hit" &&
+                      sunkCoordinates.has(
+                        coordinate
+                      );
 
                     return (
                       <button
@@ -114,17 +171,21 @@ const PublicBoard = ({
                           )
                         }
                         className={`aspect-square min-h-8 rounded border text-xs font-bold transition disabled:cursor-not-allowed ${getCellClass(
-                          status
+                          status,
+                          coordinate
                         )}`}
                         title={
-                          alreadyAttacked
-                            ? `${coordinate}: ${status}`
-                            : coordinate
+                          isSunkCell
+                            ? `${coordinate}: sunk ship`
+                            : alreadyAttacked
+                              ? `${coordinate}: ${status}`
+                              : coordinate
                         }
                       >
                         {status === "hit"
                           ? "X"
-                          : status === "miss"
+                          : status ===
+                              "miss"
                             ? "•"
                             : ""}
                       </button>
@@ -135,6 +196,23 @@ const PublicBoard = ({
             );
           }
         )}
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-4 text-xs text-slate-400">
+        <div className="flex items-center gap-2">
+          <span className="h-3 w-3 rounded-sm bg-red-500" />
+          Hit
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="h-3 w-3 rounded-sm bg-violet-600" />
+          Sunk ship
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="h-3 w-3 rounded-sm bg-slate-700" />
+          Miss
+        </div>
       </div>
     </article>
   );
